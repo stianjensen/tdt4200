@@ -85,15 +85,6 @@ int similar(unsigned char* im, pixel_t p, pixel_t q){
 
 // Create and commit MPI datatypes
 void create_types(){
-    
-    MPI_Type_vector(
-        local_image_size[0],
-        local_image_size[1],
-        image_size[1],
-        MPI_UNSIGNED_CHAR,
-        &image_t
-    );
-    MPI_Type_commit(&image_t);
 
     MPI_Type_contiguous(
         lsize_border,
@@ -125,7 +116,7 @@ void distribute_image(){
             int receiver_coords[2];
             MPI_Cart_coords(cart_comm, i, 2, receiver_coords);
 
-            char *output_buffer[lsize_border];
+            unsigned char output_buffer[lsize_border];
             for (int row = 0; row < local_image_size[0] + 2; row++) {
                 if (receiver_coords[0] == 0 && row == 0) {
                     continue;
@@ -208,9 +199,9 @@ void gather_region(){
 
     if (rank == 0) {
         for (int i = 0; i < size; i++) {
-            char *receive_buffer[lsize_border];
+            unsigned char receive_buffer[lsize_border];
             MPI_Recv(
-                &receive_buffer,
+                receive_buffer,
                 1,
                 receive_image_t,
                 i,
@@ -221,25 +212,36 @@ void gather_region(){
             int sender_coords[2];
             MPI_Cart_coords(cart_comm, i, 2, sender_coords);
 
-            for (int row = 1; row < local_image_size[0] + 1; row++) {
-                int offset;
-                if (sender_coords[1] == 0) {
-                    offset = 1;
-                } else if (sender_coords[1] == dims[1] - 1) {
-                    offset = 0;
-                } else {
-                    offset = 0;
-                }
+            printf("rec rank %d val %u\n", i, receive_buffer[local_image_size[1] + 3]);
 
-                //int write_index = (image_size[1] + 2) * row + sender_coords[1] * local_image_size[1] - 1 + offset;
+            for (int row = 1; row < local_image_size[0] + 1; row++) {
+
                 int write_index = image_size[1] * (row + local_image_size[0] * sender_coords[0]) + local_image_size[1] * sender_coords[1];
                 int read_index = (local_image_size[1] + 2) * row + 1;
+
                 memcpy(&region[write_index], &receive_buffer[read_index], local_image_size[1]);
             }
         }
     }
 
     MPI_Barrier(cart_comm);
+
+
+    /*
+    if (rank==0) {
+        for (int i = 0; i < image_size[0] + 2; i++) {
+            for (int j = 0; j < image_size[1] + 2; j++) {
+                if (i % 2 == 0 && j % 2 == 0) {
+                    region[i * (image_size[1] + 2) + j] = 1;
+                } else if (i % 2 == 1 && j % 2 == 1) {
+                    region[i * (image_size[1] + 2) + j] = 1;
+                } else {
+                    region[i * (image_size[1] + 2) + j] = 0;
+                }
+            }
+        }
+    }
+    */
 }
 
 // Determine if all ranks are finished. You may have to add arguments.
@@ -278,6 +280,20 @@ void add_seeds(stack_t* stack){
     }
 
     printf("rank %d, stack size %d\n", rank, stack->size);
+}
+
+void draw_chessboard() {
+    for (int i = 0; i < local_image_size[0] + 2; i++) {
+        for (int j = 0; j < local_image_size[1] + 2; j++) {
+            if (i % 2 == 0 && j % 2 == 0) {
+                local_region[i * (local_image_size[1] + 2) + j] = 1;
+            } else if (i % 2 == 1 && j % 2 == 1) {
+                local_region[i * (local_image_size[1] + 2) + j] = 1;
+            } else {
+                local_region[i * (local_image_size[1] + 2) + j] = 0;
+            }
+        }
+    }
 }
 
 
@@ -377,7 +393,8 @@ int main(int argc, char** argv){
     
     distribute_image();
 
-    grow_region();
+    //grow_region();
+    draw_chessboard();
     
     gather_region();
     
