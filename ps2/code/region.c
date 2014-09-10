@@ -24,7 +24,9 @@ int rank,                       // MPI rank
     periods[2] = {0,0},         // Periodicity of grid
     north,south,east,west,      // Four neighbouring MPI ranks
     image_size[2] = {512,512},  // Hard coded image size
-    local_image_size[2];        // Size of local part of image (not including border)
+    local_image_size[2],        // Height/width  of local part of image (not including border)
+    lsize,                      // Size of local part of image (not including border)
+    lsize_border;               // Size of local part of image (including border)
 
 
 MPI_Comm cart_comm;             // Cartesian communicator
@@ -32,7 +34,9 @@ MPI_Comm cart_comm;             // Cartesian communicator
 
 // MPI datatypes, you may have to add more.
 MPI_Datatype border_row_t,
-             border_col_t;
+             border_col_t,
+             image_t,
+             receive_image_t;
 
 
 unsigned char *image,           // Entire image, only on rank 0
@@ -81,13 +85,95 @@ int similar(unsigned char* im, pixel_t p, pixel_t q){
 // Create and commit MPI datatypes
 void create_types(){
     
+    MPI_Type_vector(
+        local_image_size[0],
+        local_image_size[1],
+        image_size[1],
+        MPI_UNSIGNED_CHAR,
+        &image_t
+    );
+    MPI_Type_commit(&image_t);
+
+    MPI_Type_contiguous(
+        lsize_border,
+        MPI_UNSIGNED_CHAR,
+        &receive_image_t
+    );
+    MPI_Type_commit(&receive_image_t);
 }
 
 
 // Send image from rank 0 to all ranks, from image to local_image
 void distribute_image(){
     
+    MPI_Request request;
+    MPI_Irecv(
+            local_image,
+            1,
+            receive_image_t,
+            0,
+            1,
+            cart_comm,
+            &request
+            );
     
+    if (rank == 0) {
+        for (int i = 0; i < size; i++) {
+            int receiver_coords[2];
+            MPI_Cart_coords(cart_comm, i, 2, receiver_coords);
+
+            char *output_buffer[lsize_border] = {0};
+            for (int row = 0; row < local_image_size[0] + 2; row++) {
+                if (receiver_coords[0] == 0 && row == 0) {
+                    continue;
+                }
+                if (receiver_cords[0] == dims[0] - 1 && row == local_image_size[0] + 1) {
+                    continue;
+                }
+
+                int offset, length;
+                if (receiver_coords[1] == 0) {
+                    offset = 1;
+                    length = local_image_size[1] + 1;
+                } else if (receiver_coords[1] == dims[1] - 1) {
+                    offset = 0;
+                    length = local_image_size[1] + 1;
+                } else {
+                    offset = 0;
+                    length = local_image_size[1] + 2;
+                }
+
+                int read_index = (image_size[1] + 2) * row + offset;
+                int write_index = (local_image_size[1] + 2) * row + offset;
+                memcpy(&output_buffer[write_index], &image[read_index], length);
+
+                MPI_Send(
+                    output_buffer,
+                    1,
+                    receive_image_t,
+                    i,
+                    1,
+                    cart_comm
+                    );
+            }
+
+            /*
+            int index = local_image_size[0] * image_size[1] * receiver_coords[0]
+                + local_image_size[1] * reciver_coords[1];
+
+            MPI_Send(
+                    &image[index],
+                    local_image_size[0],
+                    image_t,
+                    i,
+                    1,
+                    cart_comm
+                    );
+                    */
+        }
+    }
+
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
 }
 
 
@@ -207,8 +293,8 @@ void load_and_allocate_images(int argc, char** argv){
     local_image_size[0] = image_size[0]/dims[0];
     local_image_size[1] = image_size[1]/dims[1];
     
-    int lsize = local_image_size[0]*local_image_size[1];
-    int lsize_border = (local_image_size[0] + 2)*(local_image_size[1] + 2);
+    lsize = local_image_size[0]*local_image_size[1];
+    lsize_border = (local_image_size[0] + 2)*(local_image_size[1] + 2);
     local_image = (unsigned char*)malloc(sizeof(unsigned char)*lsize_border);
     local_region = (unsigned char*)calloc(sizeof(unsigned char),lsize_border);
 }
