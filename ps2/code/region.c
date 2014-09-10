@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <mpi.h>
 #include <math.h>
+#include <string.h>
 #include "bmp.h"
 
 typedef struct{
@@ -75,8 +76,8 @@ pixel_t pop(stack_t* stack){
 // Check if two pixels are similar. The hardcoded threshold can be changed.
 // More advanced similarity checks could have been used.
 int similar(unsigned char* im, pixel_t p, pixel_t q){
-    int a = im[p.x +  p.y * image_size[1]];
-    int b = im[q.x +  q.y * image_size[1]];
+    int a = im[p.x +  p.y * (local_image_size[1] + 2)];
+    int b = im[q.x +  q.y * (local_image_size[1] + 2)];
     int diff = abs(a-b);
     return diff < 2;
 }
@@ -106,6 +107,7 @@ void create_types(){
 // Send image from rank 0 to all ranks, from image to local_image
 void distribute_image(){
     
+    printf("hyolo\n");
     MPI_Request request;
     MPI_Irecv(
             local_image,
@@ -118,16 +120,17 @@ void distribute_image(){
             );
     
     if (rank == 0) {
+        printf("rank 0 \n");
         for (int i = 0; i < size; i++) {
             int receiver_coords[2];
             MPI_Cart_coords(cart_comm, i, 2, receiver_coords);
 
-            char *output_buffer[lsize_border] = {0};
+            char *output_buffer[lsize_border];
             for (int row = 0; row < local_image_size[0] + 2; row++) {
                 if (receiver_coords[0] == 0 && row == 0) {
                     continue;
                 }
-                if (receiver_cords[0] == dims[0] - 1 && row == local_image_size[0] + 1) {
+                if (receiver_coords[0] == dims[0] - 1 && row == local_image_size[0] + 1) {
                     continue;
                 }
 
@@ -143,19 +146,20 @@ void distribute_image(){
                     length = local_image_size[1] + 2;
                 }
 
-                int read_index = (image_size[1] + 2) * row + offset;
+                int read_index = (image_size[1] + 2) * row + receiver_coords[1] * local_image_size[1] - 1 + offset;
                 int write_index = (local_image_size[1] + 2) * row + offset;
                 memcpy(&output_buffer[write_index], &image[read_index], length);
 
-                MPI_Send(
-                    output_buffer,
-                    1,
-                    receive_image_t,
-                    i,
-                    1,
-                    cart_comm
-                    );
             }
+            printf("sending\n");
+            MPI_Send(
+                output_buffer,
+                1,
+                receive_image_t,
+                i,
+                1,
+                cart_comm
+                );
 
             /*
             int index = local_image_size[0] * image_size[1] * receiver_coords[0]
@@ -173,7 +177,10 @@ void distribute_image(){
         }
     }
 
+    printf("Waiting rank %d\n", rank);
     MPI_Wait(&request, MPI_STATUS_IGNORE);
+
+    printf("Finished waiting rank %d\n", rank);
 }
 
 
@@ -186,8 +193,53 @@ void exchange(stack_t* stack){
 
 // Gather region bitmap from all ranks to rank 0, from local_region to region
 void gather_region(){
-    
-    
+
+    MPI_Request request;
+
+    MPI_Isend(
+        local_region,
+        1,
+        receive_image_t,
+        0,
+        1,
+        cart_comm,
+        &request
+    );
+
+    if (rank == 0) {
+        for (int i = 0; i < size; i++) {
+            char *receive_buffer[lsize_border];
+            MPI_Recv(
+                &receive_buffer,
+                1,
+                receive_image_t,
+                i,
+                1,
+                cart_comm,
+                MPI_STATUS_IGNORE
+            );
+            int sender_coords[2];
+            MPI_Cart_coords(cart_comm, i, 2, sender_coords);
+
+            for (int row = 1; row < local_image_size[0] + 1; row++) {
+                int offset;
+                if (sender_coords[1] == 0) {
+                    offset = 1;
+                } else if (sender_coords[1] == dims[1] - 1) {
+                    offset = 0;
+                } else {
+                    offset = 0;
+                }
+
+                //int write_index = (image_size[1] + 2) * row + sender_coords[1] * local_image_size[1] - 1 + offset;
+                int write_index = image_size[1] * (row + local_image_size[0] * sender_coords[0]) + local_image_size[1] * sender_coords[1];
+                int read_index = (local_image_size[1] + 2) * row + 1;
+                memcpy(&region[write_index], &receive_buffer[read_index], local_image_size[1]);
+            }
+        }
+    }
+
+    MPI_Barrier(cart_comm);
 }
 
 // Determine if all ranks are finished. You may have to add arguments.
@@ -224,39 +276,43 @@ void add_seeds(stack_t* stack){
             push(stack, seed);
         }
     }
+
+    printf("rank %d, stack size %d\n", rank, stack->size);
 }
 
 
 // Region growing, serial implementation
-void grow_region(){
+void grow_region() {
     
-    stack_t* stack = new_stack();
+    printf("Rank %d starts growing\n");
+    stack_t *stack = new_stack();
     add_seeds(stack);
-        
-    while(stack->size > 0){
+
+    int local_region_width = local_image_size[1] + 2;
+
+    while(stack->size > 0) {
         pixel_t pixel = pop(stack);
-        
-        region[pixel.y * image_size[1] + pixel.x] = 1;
-        
-        
+
+        local_region[pixel.y * local_region_width + pixel.x] = 1;
+
+
         int dx[4] = {0,0,1,-1}, dy[4] = {1,-1,0,0};
-        for(int c = 0; c < 4; c++){
+        for (int c = 0; c < 4; c++) {
             pixel_t candidate;
             candidate.x = pixel.x + dx[c];
             candidate.y = pixel.y + dy[c];
-            
-            if(!inside(candidate)){
+
+            if (!inside(candidate)) {
                 continue;
             }
-            
-            
-            if(region[candidate.y * image_size[1] + candidate.x]){
+
+            if (local_region[candidate.y * local_region_width + candidate.x]) {
                 continue;
             }
-            
-            if(similar(image, pixel, candidate)){
-                region[candidate.x + candidate.y * image_size[1]] = 1;
-                push(stack,candidate);
+
+            if (similar(local_image, pixel, candidate)) {
+                local_region[candidate.y * local_region_width + candidate.x] = 1;
+                push(stack, candidate);
             }
         }
     }
