@@ -76,8 +76,8 @@ pixel_t pop(stack_t* stack){
 // Check if two pixels are similar. The hardcoded threshold can be changed.
 // More advanced similarity checks could have been used.
 int similar(unsigned char* im, pixel_t p, pixel_t q){
-    int a = im[p.x +  p.y * (local_image_size[1] + 2)];
-    int b = im[q.x +  q.y * (local_image_size[1] + 2)];
+    int a = im[p.x +  (p.y+1) * (local_image_size[1] + 2) + 1];
+    int b = im[q.x +  (q.y+1) * (local_image_size[1] + 2) + 1];
     int diff = abs(a-b);
     return diff < 2;
 }
@@ -125,20 +125,18 @@ void distribute_image(){
                     continue;
                 }
 
-                int offset, length;
+                int offset = 0;
+                int length = local_image_size[1] + 2;
                 if (receiver_coords[1] == 0) {
                     offset = 1;
-                    length = local_image_size[1] + 1;
-                } else if (receiver_coords[1] == dims[1] - 1) {
-                    offset = 0;
-                    length = local_image_size[1] + 1;
-                } else {
-                    offset = 0;
-                    length = local_image_size[1] + 2;
+                    length--;
+                }
+                if (receiver_coords[1] == dims[1] - 1) {
+                    length--;
                 }
 
-                int read_index = (image_size[1] + 2) * row + receiver_coords[1] * local_image_size[1] - 1 + offset;
-                int write_index = (local_image_size[1] + 2) * row + offset;
+                int read_index = image_size[1] * (row-1 + receiver_coords[0] * local_image_size[0]) + receiver_coords[1] * local_image_size[1];
+                int write_index = (local_image_size[1]+2) * row + offset;
                 memcpy(&output_buffer[write_index], &image[read_index], length);
 
             }
@@ -151,20 +149,6 @@ void distribute_image(){
                 1,
                 cart_comm
                 );
-
-            /*
-            int index = local_image_size[0] * image_size[1] * receiver_coords[0]
-                + local_image_size[1] * reciver_coords[1];
-
-            MPI_Send(
-                    &image[index],
-                    local_image_size[0],
-                    image_t,
-                    i,
-                    1,
-                    cart_comm
-                    );
-                    */
         }
     }
 
@@ -225,23 +209,6 @@ void gather_region(){
     }
 
     MPI_Barrier(cart_comm);
-
-
-    /*
-    if (rank==0) {
-        for (int i = 0; i < image_size[0] + 2; i++) {
-            for (int j = 0; j < image_size[1] + 2; j++) {
-                if (i % 2 == 0 && j % 2 == 0) {
-                    region[i * (image_size[1] + 2) + j] = 1;
-                } else if (i % 2 == 1 && j % 2 == 1) {
-                    region[i * (image_size[1] + 2) + j] = 1;
-                } else {
-                    region[i * (image_size[1] + 2) + j] = 0;
-                }
-            }
-        }
-    }
-    */
 }
 
 // Determine if all ranks are finished. You may have to add arguments.
@@ -309,7 +276,7 @@ void grow_region() {
     while(stack->size > 0) {
         pixel_t pixel = pop(stack);
 
-        local_region[pixel.y * local_region_width + pixel.x] = 1;
+        local_region[(pixel.y+1) * local_region_width + pixel.x + 1] = 1;
 
 
         int dx[4] = {0,0,1,-1}, dy[4] = {1,-1,0,0};
@@ -322,12 +289,12 @@ void grow_region() {
                 continue;
             }
 
-            if (local_region[candidate.y * local_region_width + candidate.x]) {
+            if (local_region[(candidate.y+1) * local_region_width + candidate.x + 1]) {
                 continue;
             }
 
             if (similar(local_image, pixel, candidate)) {
-                local_region[candidate.y * local_region_width + candidate.x] = 1;
+                local_region[(candidate.y+1) * local_region_width + candidate.x + 1] = 1;
                 push(stack, candidate);
             }
         }
