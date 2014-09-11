@@ -393,8 +393,8 @@ int main(int argc, char** argv){
     
     distribute_image();
 
-    //grow_region();
-    draw_chessboard();
+    grow_region();
+    //draw_chessboard();
     
     gather_region();
     
