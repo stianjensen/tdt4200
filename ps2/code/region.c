@@ -36,6 +36,7 @@ MPI_Comm cart_comm;             // Cartesian communicator
 // MPI datatypes, you may have to add more.
 MPI_Datatype border_row_t,
              border_col_t,
+             border_col_receive_t,
              image_t,
              receive_image_t;
 
@@ -92,13 +93,21 @@ void create_types(){
         &receive_image_t
     );
     MPI_Type_commit(&receive_image_t);
+
+    MPI_Type_vector(local_image_size[0], 1, local_image_size[1]+2, MPI_UNSIGNED_CHAR, &border_col_t);
+    MPI_Type_commit(&border_col_t);
+
+    MPI_Type_contiguous(local_image_size[0], MPI_UNSIGNED_CHAR, &border_col_receive_t);
+    MPI_Type_commit(&border_col_receive_t);
+
+    MPI_Type_contiguous(local_image_size[1], MPI_UNSIGNED_CHAR, &border_row_t);
+    MPI_Type_commit(&border_row_t);
 }
 
 
 // Send image from rank 0 to all ranks, from image to local_image
 void distribute_image(){
     
-    printf("hyolo\n");
     MPI_Request request;
     MPI_Irecv(
             local_image,
@@ -111,7 +120,6 @@ void distribute_image(){
             );
     
     if (rank == 0) {
-        printf("rank 0 \n");
         for (int i = 0; i < size; i++) {
             int receiver_coords[2];
             MPI_Cart_coords(cart_comm, i, 2, receiver_coords);
@@ -140,7 +148,6 @@ void distribute_image(){
                 memcpy(&output_buffer[write_index], &image[read_index], length);
 
             }
-            printf("sending\n");
             MPI_Send(
                 output_buffer,
                 1,
@@ -152,17 +159,97 @@ void distribute_image(){
         }
     }
 
-    printf("Waiting rank %d\n", rank);
     MPI_Wait(&request, MPI_STATUS_IGNORE);
-
-    printf("Finished waiting rank %d\n", rank);
 }
 
 
 // Exchange borders with neighbour ranks
 void exchange(stack_t* stack){
-    
-    
+
+    MPI_Request request;
+
+    if (south != -2) {
+        int send_index = (local_image_size[1]+2) * local_image_size[0] + 1;
+        MPI_Isend(&local_region[send_index], 1, border_row_t, south, 2, cart_comm, &request);
+
+        unsigned char receive_buffer[local_image_size[1]];
+        MPI_Recv(receive_buffer, 1, border_row_t, south, 2, cart_comm, MPI_STATUS_IGNORE);
+
+        int receive_index = send_index + local_image_size[1] + 2;
+        for (int i = 0; i < local_image_size[1]; i++) {
+            if (receive_buffer[i] == 1 && local_region[receive_index + i] != 1) {
+                local_region[receive_index + i] = 1;
+
+                pixel_t seed;
+                seed.x = i;
+                seed.y = local_image_size[0];
+                push(stack, seed);
+            }
+        }
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+
+    if (north != -2) {
+        int send_index = local_image_size[1] + 2 + 1;
+        MPI_Isend(&local_region[send_index], 1, border_row_t, north, 2, cart_comm, &request);
+
+        unsigned char receive_buffer[local_image_size[1]];
+        MPI_Recv(receive_buffer, 1, border_row_t, north, 2, cart_comm, MPI_STATUS_IGNORE);
+
+        for (int i = 0; i < local_image_size[1]; i++) {
+            if (receive_buffer[i] == 1 && local_region[1 + i] != 1) {
+                local_region[1 + i] = 1;
+
+                pixel_t seed;
+                seed.x = i;
+                seed.y = -1;
+                push(stack, seed);
+            }
+        }
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+
+    if (east != -2) {
+        int send_index = local_image_size[1] * 2 + 2;
+        MPI_Isend(&local_region[send_index], 1, border_col_t, east, 2, cart_comm, &request);
+
+        unsigned char receive_buffer[local_image_size[0]];
+        MPI_Recv(receive_buffer, 1, border_col_receive_t, east, 2, cart_comm, MPI_STATUS_IGNORE);
+
+        for (int i = 0; i < local_image_size[0]; i++) {
+            if (receive_buffer[i] == 1 && local_region[send_index + 1 + (local_image_size[1] + 2) * i] != 1) {
+                local_region[send_index + 1 + (local_image_size[1] + 2) * i] = 1;
+
+                pixel_t seed;
+                seed.x = local_image_size[1];
+                seed.y = i;
+                push(stack, seed);
+            }
+        }
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+
+    if (west != -2) {
+        int send_index = local_image_size[1] + 2 + 1;
+        MPI_Isend(&local_region[send_index], 1, border_col_t, west, 2, cart_comm, &request);
+
+        unsigned char receive_buffer[local_image_size[0]];
+        MPI_Recv(receive_buffer, 1, border_col_receive_t, west, 2, cart_comm, MPI_STATUS_IGNORE);
+
+        for (int i = 0; i < local_image_size[0]; i++) {
+            if (receive_buffer[i] == 1 && local_region[send_index - 1 + (local_image_size[1] + 2) * i] != 1) {
+                local_region[send_index - 1 + (local_image_size[1] + 2) * i] = 1;
+
+                pixel_t seed;
+                seed.x = -1;
+                seed.y = i;
+                push(stack, seed);
+            }
+        }
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+
+    MPI_Barrier(cart_comm);
 }
 
 
@@ -196,7 +283,6 @@ void gather_region(){
             int sender_coords[2];
             MPI_Cart_coords(cart_comm, i, 2, sender_coords);
 
-            printf("rec rank %d val %u\n", i, receive_buffer[local_image_size[1] + 3]);
 
             for (int row = 1; row < local_image_size[0] + 1; row++) {
 
@@ -213,8 +299,32 @@ void gather_region(){
 
 // Determine if all ranks are finished. You may have to add arguments.
 // You dont have to have this check as a seperate function
-int finished(){
-   
+int finished(stack_t *stack){
+    int finished = (stack->size == 0);
+    int global_finished = 0;
+    if (rank == 0) {
+        int num_finished = finished;
+        for (int i = 1; i < size; i++) {
+            int rank_finished;
+            MPI_Recv(&rank_finished, 1, MPI_INT, i, 3, cart_comm, MPI_STATUS_IGNORE);
+            if (rank_finished != 0) {
+                num_finished++;
+            }
+        }
+        if (num_finished == size) {
+            global_finished = 1;
+        }
+        for (int i = 1; i < size; i++) {
+            MPI_Send(&global_finished, 1, MPI_INT, i, 3, cart_comm);
+        }
+    } else {
+        MPI_Request request;
+        MPI_Isend(&finished, 1, MPI_INT, 0, 3, cart_comm, &request);
+
+        MPI_Recv(&global_finished, 1, MPI_INT, 0, 3, cart_comm, MPI_STATUS_IGNORE);
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+    }
+    return global_finished;
 }
 
 
@@ -245,8 +355,6 @@ void add_seeds(stack_t* stack){
             push(stack, seed);
         }
     }
-
-    printf("rank %d, stack size %d\n", rank, stack->size);
 }
 
 void draw_chessboard() {
@@ -266,38 +374,40 @@ void draw_chessboard() {
 
 // Region growing, serial implementation
 void grow_region() {
-    
-    printf("Rank %d starts growing\n");
+
     stack_t *stack = new_stack();
     add_seeds(stack);
 
     int local_region_width = local_image_size[1] + 2;
 
-    while(stack->size > 0) {
-        pixel_t pixel = pop(stack);
+    while (finished(stack) == 0) {
+        while(stack->size > 0) {
+            pixel_t pixel = pop(stack);
 
-        local_region[(pixel.y+1) * local_region_width + pixel.x + 1] = 1;
+            local_region[(pixel.y+1) * local_region_width + pixel.x + 1] = 1;
 
 
-        int dx[4] = {0,0,1,-1}, dy[4] = {1,-1,0,0};
-        for (int c = 0; c < 4; c++) {
-            pixel_t candidate;
-            candidate.x = pixel.x + dx[c];
-            candidate.y = pixel.y + dy[c];
+            int dx[4] = {0,0,1,-1}, dy[4] = {1,-1,0,0};
+            for (int c = 0; c < 4; c++) {
+                pixel_t candidate;
+                candidate.x = pixel.x + dx[c];
+                candidate.y = pixel.y + dy[c];
 
-            if (!inside(candidate)) {
-                continue;
-            }
+                if (!inside(candidate)) {
+                    continue;
+                }
 
-            if (local_region[(candidate.y+1) * local_region_width + candidate.x + 1]) {
-                continue;
-            }
+                if (local_region[(candidate.y+1) * local_region_width + candidate.x + 1]) {
+                    continue;
+                }
 
-            if (similar(local_image, pixel, candidate)) {
-                local_region[(candidate.y+1) * local_region_width + candidate.x + 1] = 1;
-                push(stack, candidate);
+                if (similar(local_image, pixel, candidate)) {
+                    local_region[(candidate.y+1) * local_region_width + candidate.x + 1] = 1;
+                    push(stack, candidate);
+                }
             }
         }
+        exchange(stack);
     }
 }
 
