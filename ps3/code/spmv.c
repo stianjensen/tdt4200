@@ -156,7 +156,7 @@ void print_time(struct timeval start, struct timeval end){
 
 void multiply_naive(csr_matrix_t* m, float* v, float* r){
     for(int i = 0; i < m->n_row_ptr-1; i++){
-        
+
         for(int j = m->row_ptr[i]; j < m->row_ptr[i+1]; j++){
             r[i] += v[m->col_ind[j]] * m->values[j];
         }
@@ -185,7 +185,15 @@ s_matrix_t* convert_to_s_matrix(csr_matrix_t* csr){
     return NULL;
 }
 
-void multiply(s_matrix_t* m, float* v, float* r){
+void multiply(csr_matrix_t* m, float* v, float* r){
+    for(int i = 0; i < m->n_row_ptr-1; i++){
+
+        float tmp = 0;
+        for(int j = m->row_ptr[i], len = m->row_ptr[i+1]; j < len; j++){
+            tmp += v[m->col_ind[j]] * m->values[j];
+        }
+        r[i] = tmp;
+    }
 }
 
 
@@ -220,7 +228,7 @@ int main(int argc, char** argv){
     //s_matrix_t* s = convert_to_s_matrix(m);
     
     gettimeofday(&start, NULL);
-    multiply(s,v,r2);
+    multiply(m,v,r2);
     gettimeofday(&end, NULL);
     
     print_time(start, end);
