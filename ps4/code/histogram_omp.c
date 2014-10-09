@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <omp.h>
 #include "bmp.h"
 
 const int image_width = 512;
@@ -15,18 +16,32 @@ int main(int argc, char** argv){
         exit(-1);
     }
     int n_threads = atoi(argv[2]);
+    omp_set_num_threads(n_threads);
 
     unsigned char* image = read_bmp(argv[1]);
     unsigned char* output_image = malloc(sizeof(unsigned char) * image_size);
 
 
     int* histogram = (int*)calloc(sizeof(int), color_depth);
-    for(int i = 0; i < image_size; i++){
-        histogram[image[i]]++;
-    }
 
+#pragma omp parallel
+{
+    int *local_histogram = (int*)calloc(sizeof(int), color_depth);
+#pragma omp for
+    for(int i = 0; i < image_size; i++){
+        local_histogram[image[i]]++;
+    }
+#pragma omp critical
+    {
+        for (int i = 0; i < color_depth; i++) {
+            histogram[i] += local_histogram[i];
+        }
+    }
+}
 
     float* transfer_function = (float*)calloc(sizeof(float), color_depth);
+
+#pragma omp parallel for schedule(guided)
     for(int i = 0; i < color_depth; i++){
         for(int j = 0; j < i+1; j++){
             transfer_function[i] += color_depth*((float)histogram[j])/(image_size);
@@ -34,6 +49,7 @@ int main(int argc, char** argv){
     }
 
 
+#pragma omp parallel for schedule(static)
     for(int i = 0; i < image_size; i++){
         output_image[i] = transfer_function[image[i]];
     }
