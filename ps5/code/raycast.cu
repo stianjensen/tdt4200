@@ -323,7 +323,34 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
 
 
 __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, int* finished){
+    int threadId = blockIdx.x * DATA_DIM + threadIdx.x;
+    if (region[threadId] == 2) {
+        region[threadId] = 1;
 
+        int dx[6] = {-1,1,0,0,0,0};
+        int dy[6] = {0,0,-1,1,0,0};
+        int dz[6] = {0,0,0,0,-1,1};
+
+        for (int n = 0; n < 6; n++) {
+            int3 candidate = pixel;
+            candidate.x += dx[n];
+            candidate.y += dy[n];
+            candidate.z += dz[n];
+
+            if (!inside(candidate)) {
+                continue;
+            }
+
+            if (region[candidate.z * DATA_DIM*DATA_DIM + candidate.y*DATA_DIM + candidate.x]) {
+                continue;
+            }
+
+            if (similar(data, pixel, candidate)) {
+                region[candidate.z * DATA_DIM*DATA_DIM + candidate.y*DATA_DIM + candidate.x] = 2;
+                *finished = false;
+            }
+        }
+    }
 }
 
 
