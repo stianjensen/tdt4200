@@ -46,7 +46,7 @@ int3 pop(stack_t* stack){
 }
 
 // float3 utilities
-float3 cross(float3 a, float3 b){
+__host__ __device__ float3 cross(float3 a, float3 b){
     float3 c;
     c.x = a.y*b.z - a.z*b.y;
     c.y = a.z*b.x - a.x*b.z;
@@ -55,7 +55,7 @@ float3 cross(float3 a, float3 b){
     return c;
 }
 
-float3 normalize(float3 v){
+__host__ __device__ float3 normalize(float3 v){
     float l = sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
     v.x /= l;
     v.y /= l;
@@ -64,7 +64,7 @@ float3 normalize(float3 v){
     return v;
 }
 
-float3 add(float3 a, float3 b){
+__host__ __device__ float3 add(float3 a, float3 b){
     a.x += b.x;
     a.y += b.y;
     a.z += b.z;
@@ -72,7 +72,7 @@ float3 add(float3 a, float3 b){
     return a;
 }
 
-float3 scale(float3 a, float b){
+__host__ __device__ float3 scale(float3 a, float b){
     a.x *= b;
     a.y *= b;
     a.z *= b;
@@ -142,7 +142,7 @@ unsigned char* create_data(){
 }
 
 // Checks if position is inside the volume (float3 and int3 versions)
-int inside(float3 pos){
+__host__ __device__ int inside(float3 pos){
     int x = (pos.x >= 0 && pos.x < DATA_DIM-1);
     int y = (pos.y >= 0 && pos.y < DATA_DIM-1);
     int z = (pos.z >= 0 && pos.z < DATA_DIM-1);
@@ -150,7 +150,7 @@ int inside(float3 pos){
     return x && y && z;
 }
 
-int inside(int3 pos){
+__host__ __device__ int inside(int3 pos){
     int x = (pos.x >= 0 && pos.x < DATA_DIM);
     int y = (pos.y >= 0 && pos.y < DATA_DIM);
     int z = (pos.z >= 0 && pos.z < DATA_DIM);
@@ -159,12 +159,12 @@ int inside(int3 pos){
 }
 
 // Indexing function (note the argument order)
-int index(int z, int y, int x){
+__host__ __device__ int index(int z, int y, int x){
     return z * DATA_DIM*DATA_DIM + y*DATA_DIM + x;
 }
 
 // Trilinear interpolation
-float value_at(float3 pos, unsigned char* data){
+__host__ __device__ float value_at(float3 pos, unsigned char* data){
     if(!inside(pos)){
         return 0;
     }
@@ -303,7 +303,49 @@ unsigned char* grow_region_serial(unsigned char* data){
 
 
 __global__ void raycast_kernel(unsigned char* data, unsigned char* image, unsigned char* region){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+    // Camera/eye position, and direction of viewing. These can be changed to look
+    // at the volume from different angles.
+    float3 camera = {.x=1000,.y=1000,.z=1000};
+    float3 forward = {.x=-1, .y=-1, .z=-1};
+    float3 z_axis = {.x=0, .y=0, .z = 1};
+
+    // Finding vectors aligned with the axis of the image
+    float3 right = cross(forward, z_axis);
+    float3 up = cross(right, forward);
+
+    // Creating unity lenght vectors
+    forward = normalize(forward);
+    right = normalize(right);
+    up = normalize(up);
+
+    float fov = 3.14/4;
+    float pixel_width = tan(fov/2.0)/(IMAGE_DIM/2);
+    float step_size = 0.5;
+
+    // Find the ray for this pixel
+    float3 screen_center = add(camera, forward);
+    float3 ray = add(add(screen_center, scale(right, x*pixel_width)), scale(up, y*pixel_width));
+    ray = add(ray, scale(camera, -1));
+    ray = normalize(ray);
+    float3 pos = camera;
+
+    // Move along the ray, we stop if the color becomes completely white,
+    // or we've done 5000 iterations (5000 is a bit arbitrary, it needs 
+    // to be big enough to let rays pass through the entire volume)
+    int i = 0;
+    float color = 0;
+    while(color < 255 && i < 5000){
+        i++;
+        pos = add(pos, scale(ray, step_size));          // Update position
+        int r = value_at(pos, region);                  // Check if we're in the region
+        color += value_at(pos, data)*(0.01 + r) ;       // Update the color based on data value, and if we're in the region
+    }
+
+    // Write final color to image
+    image[(y+(IMAGE_DIM/2)) * IMAGE_DIM + (x+(IMAGE_DIM/2))] = color > 255 ? 255 : color;
 }
 
 
@@ -313,7 +355,31 @@ __global__ void raycast_kernel_texture(unsigned char* image){
 
 
 unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
-    return NULL;
+    dim3 gridBlock, threadBlock;
+
+    gridBlock.x = 16;
+    gridBlock.y = 16;
+
+    threadBlock.x = 32;
+    threadBlock.y = 32;
+
+    unsigned char *device_image;
+    unsigned char *device_data;
+    unsigned char *device_region;
+
+    cudaMalloc(&device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
+    cudaMalloc(&device_data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+    cudaMalloc(&device_region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+
+    cudaMemcpy(device_data, data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+    cudaMemcpy(device_region, region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+
+    raycast_kernel<<<gridBlock, threadBlock>>>(device_data, device_image, device_region);
+
+    unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
+    cudaMemcpy(image, device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM, cudaMemcpyDeviceToHost);
+
+    return image;
 }
 
 
@@ -378,7 +444,9 @@ int main(int argc, char** argv){
 
     unsigned char* region = grow_region_serial(data);
 
-    unsigned char* image = raycast_serial(data, region);
+    //unsigned char* image = raycast_serial(data, region);
+
+    unsigned char *image = raycast_gpu(data, region);
 
     write_bmp(image, IMAGE_DIM, IMAGE_DIM);
 }
