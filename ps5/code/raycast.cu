@@ -323,6 +323,7 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
 
 
 __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, int* finished){
+    /*
     int threadId = blockIdx.x * DATA_DIM + threadIdx.x;
     if (region[threadId] == 2) {
         region[threadId] = 1;
@@ -351,6 +352,7 @@ __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, i
             }
         }
     }
+    */
 }
 
 
