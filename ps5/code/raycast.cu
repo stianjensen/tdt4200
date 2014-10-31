@@ -10,6 +10,8 @@
 // image is 2D, total size is IMAGE_DIM x IMAGE_DIM
 #define IMAGE_DIM 512
 
+texture<int, cudaTextureType3D, cudaReadModeElementType> data_texture;
+
 
 // Stack for the serial region growing
 typedef struct{
@@ -252,7 +254,7 @@ unsigned char* raycast_serial(unsigned char* data, unsigned char* region){
 
 
 // Check if two values are similar, threshold can be changed.
-int similar(unsigned char* data, int3 a, int3 b){
+__host__ __device__ int similar(unsigned char* data, int3 a, int3 b){
     unsigned char va = data[a.z * DATA_DIM*DATA_DIM + a.y*DATA_DIM + a.x];
     unsigned char vb = data[b.z * DATA_DIM*DATA_DIM + b.y*DATA_DIM + b.x];
 
@@ -384,19 +386,49 @@ unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
 
 
 unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
-    return NULL;
+    dim3 gridBlock, threadBlock;
+
+    gridBlock.x = 16;
+    gridBlock.y = 16;
+
+    threadBlock.x = 32;
+    threadBlock.y = 32;
+
+    unsigned char *device_image;
+    unsigned char *device_data;
+    unsigned char *device_region;
+
+    cudaMalloc(&device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
+    cudaMalloc(&device_data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+    cudaMalloc(&device_region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+
+    cudaMemcpy(device_data, data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+    cudaMemcpy(device_region, region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+
+    raycast_kernel<<<gridBlock, threadBlock>>>(device_data, device_image, device_region);
+
+    unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
+    cudaMemcpy(image, device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM, cudaMemcpyDeviceToHost);
+
+    return image;
 }
 
 
 __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, int* finished){
-    /*
-    int threadId = blockIdx.x * DATA_DIM + threadIdx.x;
+    int threadX = blockIdx.x * blockDim.x + threadIdx.x;
+    int threadY = blockIdx.y * blockDim.y + threadIdx.y;
+    int threadZ = blockIdx.z * blockDim.z + threadIdx.z;
+
+    int threadId = index(threadZ, threadY, threadX);
+
     if (region[threadId] == 2) {
         region[threadId] = 1;
 
         int dx[6] = {-1,1,0,0,0,0};
         int dy[6] = {0,0,-1,1,0,0};
         int dz[6] = {0,0,0,0,-1,1};
+
+        int3 pixel = {.x=threadX, .y=threadY, .z=threadZ};
 
         for (int n = 0; n < 6; n++) {
             int3 candidate = pixel;
@@ -414,11 +446,10 @@ __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, i
 
             if (similar(data, pixel, candidate)) {
                 region[candidate.z * DATA_DIM*DATA_DIM + candidate.y*DATA_DIM + candidate.x] = 2;
-                *finished = false;
+                *finished = 0;
             }
         }
     }
-    */
 }
 
 
@@ -428,7 +459,40 @@ __global__ void region_grow_kernel_shared(unsigned char* data, unsigned char* re
 
 
 unsigned char* grow_region_gpu(unsigned char* data){
-    return NULL;
+    unsigned char *region = (unsigned char *)malloc(sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+
+    dim3 gridBlock, threadBlock;
+
+    gridBlock.x = 32;
+    gridBlock.y = 32;
+    gridBlock.z = 32;
+
+    threadBlock.x = DATA_DIM / 32;
+    threadBlock.y = DATA_DIM / 32;
+    threadBlock.z = DATA_DIM / 32;
+
+    unsigned char *device_region;
+    unsigned char *device_data;
+    int *device_finished;
+
+    cudaMalloc(&device_region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+    cudaMalloc(&device_data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
+    cudaMalloc(&device_finished, sizeof(int));
+
+    cudaMemcpy(device_data, data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+
+    int finished = 0;
+    while (!finished) {
+        finished = 1;
+
+        cudaMemcpy(device_finished, &finished, sizeof(int), cudaMemcpyHostToDevice);
+        region_grow_kernel<<<gridBlock, threadBlock>>>(device_data, device_region, device_finished);
+        cudaMemcpy(&finished, device_finished, sizeof(int), cudaMemcpyDeviceToHost);
+    }
+
+    cudaMemcpy(region, device_region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyDeviceToHost);
+
+    return region;
 }
 
 
@@ -442,7 +506,9 @@ int main(int argc, char** argv){
 
     unsigned char* data = create_data();
 
-    unsigned char* region = grow_region_serial(data);
+    //unsigned char* region = grow_region_serial(data);
+
+    unsigned char *region = grow_region_gpu(data);
 
     //unsigned char* image = raycast_serial(data, region);
 
