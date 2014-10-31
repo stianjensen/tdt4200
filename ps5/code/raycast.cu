@@ -11,6 +11,7 @@
 #define IMAGE_DIM 512
 
 texture<int, cudaTextureType3D, cudaReadModeElementType> data_texture;
+texture<int, cudaTextureType3D, cudaReadModeElementType> region_texture;
 
 
 // Stack for the serial region growing
@@ -352,6 +353,49 @@ __global__ void raycast_kernel(unsigned char* data, unsigned char* image, unsign
 
 
 __global__ void raycast_kernel_texture(unsigned char* image){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    // Camera/eye position, and direction of viewing. These can be changed to look
+    // at the volume from different angles.
+    float3 camera = {.x=1000,.y=1000,.z=1000};
+    float3 forward = {.x=-1, .y=-1, .z=-1};
+    float3 z_axis = {.x=0, .y=0, .z = 1};
+
+    // Finding vectors aligned with the axis of the image
+    float3 right = cross(forward, z_axis);
+    float3 up = cross(right, forward);
+
+    // Creating unity lenght vectors
+    forward = normalize(forward);
+    right = normalize(right);
+    up = normalize(up);
+
+    float fov = 3.14/4;
+    float pixel_width = tan(fov/2.0)/(IMAGE_DIM/2);
+    float step_size = 0.5;
+
+    // Find the ray for this pixel
+    float3 screen_center = add(camera, forward);
+    float3 ray = add(add(screen_center, scale(right, x*pixel_width)), scale(up, y*pixel_width));
+    ray = add(ray, scale(camera, -1));
+    ray = normalize(ray);
+    float3 pos = camera;
+
+    // Move along the ray, we stop if the color becomes completely white,
+    // or we've done 5000 iterations (5000 is a bit arbitrary, it needs 
+    // to be big enough to let rays pass through the entire volume)
+    int i = 0;
+    float color = 0;
+    while(color < 255 && i < 5000){
+        i++;
+        pos = add(pos, scale(ray, step_size));                        // Update position
+        int r = tex3D(region_texture, pos.x, pos.y, pos.z);           // Check if we're in the region
+        color += tex3D(data_texture, pos.x, pos.y, pos.z)*(0.01 + r); // Update the color based on data value, and if we're in the region
+    }
+
+    // Write final color to image
+    image[(y+(IMAGE_DIM/2)) * IMAGE_DIM + (x+(IMAGE_DIM/2))] = color > 255 ? 255 : color;
 
 }
 
@@ -395,17 +439,44 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
     threadBlock.y = 32;
 
     unsigned char *device_image;
-    unsigned char *device_data;
-    unsigned char *device_region;
 
     cudaMalloc(&device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
-    cudaMalloc(&device_data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
-    cudaMalloc(&device_region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM);
 
-    cudaMemcpy(device_data, data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
-    cudaMemcpy(device_region, region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(8,0,0,0,cudaChannelFormatKindUnsigned);
 
-    raycast_kernel<<<gridBlock, threadBlock>>>(device_data, device_image, device_region);
+    cudaExtent extent = make_cudaExtent(DATA_DIM, DATA_DIM, DATA_DIM);
+
+    cudaArray* device_data;
+
+    cudaMalloc3DArray(&device_data, &channelDesc, extent, 0);
+
+    cudaMemcpy3DParms data_copyParams = {0};
+    data_copyParams.srcPtr   = make_cudaPitchedPtr(data, DATA_DIM * sizeof(int), DATA_DIM, DATA_DIM);
+    data_copyParams.dstArray = device_data;
+    data_copyParams.extent   = extent;
+    data_copyParams.kind     = cudaMemcpyHostToDevice;
+
+    cudaMemcpy3D(&data_copyParams);
+
+    cudaBindTextureToArray(data_texture, device_data);
+
+    cudaArray* device_region;
+
+    cudaMalloc3DArray(&device_region, &channelDesc, extent, 0);
+
+    cudaMemcpy3DParms region_copyParams = {0};
+    region_copyParams.srcPtr   = make_cudaPitchedPtr(region, DATA_DIM * sizeof(int), DATA_DIM, DATA_DIM);
+    region_copyParams.dstArray = device_region;
+    region_copyParams.extent   = extent;
+    region_copyParams.kind     = cudaMemcpyHostToDevice;
+
+    cudaMemcpy3D(&region_copyParams);
+
+    cudaBindTextureToArray(region_texture, device_region);
+
+    raycast_kernel_texture<<<gridBlock, threadBlock>>>(device_image);
+
+    printf("%s", cudaGetErrorString(cudaGetLastError()));
 
     unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
     cudaMemcpy(image, device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM, cudaMemcpyDeviceToHost);
@@ -506,13 +577,15 @@ int main(int argc, char** argv){
 
     unsigned char* data = create_data();
 
-    //unsigned char* region = grow_region_serial(data);
+    unsigned char* region = grow_region_serial(data);
 
-    unsigned char *region = grow_region_gpu(data);
+    //unsigned char *region = grow_region_gpu(data);
 
     //unsigned char* image = raycast_serial(data, region);
 
-    unsigned char *image = raycast_gpu(data, region);
+    //unsigned char *image = raycast_gpu(data, region);
+
+    unsigned char *image = raycast_gpu_texture(data, region);
 
     write_bmp(image, IMAGE_DIM, IMAGE_DIM);
 }
