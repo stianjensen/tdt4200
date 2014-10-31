@@ -491,6 +491,7 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
 
 
 __global__ void region_grow_kernel(unsigned char* data, unsigned char* region, int* finished){
+    printf("hello\n");
     int threadX = blockIdx.x * blockDim.x + threadIdx.x;
     int threadY = blockIdx.y * blockDim.y + threadIdx.y;
     int threadZ = blockIdx.z * blockDim.z + threadIdx.z;
@@ -588,15 +589,15 @@ unsigned char* grow_region_gpu(unsigned char* data){
 
     dim3 gridBlock, threadBlock;
 
-    gridBlock.x = 32;
-    gridBlock.y = 32;
-    gridBlock.z = 32;
+    gridBlock.x = 64;
+    gridBlock.y = 64;
+    gridBlock.z = 64;
 
-    threadBlock.x = DATA_DIM / 32;
-    threadBlock.y = DATA_DIM / 32;
-    threadBlock.z = DATA_DIM / 32;
+    threadBlock.x = DATA_DIM / 64;
+    threadBlock.y = DATA_DIM / 64;
+    threadBlock.z = DATA_DIM / 64;
 
-    //region[index(300, 300, 50)] = 2;
+    region[index(300, 300, 50)] = 2;
 
     unsigned char *device_region;
     unsigned char *device_data;
@@ -607,17 +608,15 @@ unsigned char* grow_region_gpu(unsigned char* data){
     cudaMalloc(&device_finished, sizeof(int));
 
     cudaMemcpy(device_data, data, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
-    //cudaMemcpy(device_region, region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
+    cudaMemcpy(device_region, region, sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM, cudaMemcpyHostToDevice);
 
     int finished = 0;
-    int i = 0;
     while (!finished) {
-        i++;
-        if (i > 100) finished = 1;
         finished = 1;
 
         cudaMemcpy(device_finished, &finished, sizeof(int), cudaMemcpyHostToDevice);
         region_grow_kernel<<<gridBlock, threadBlock>>>(device_data, device_region, device_finished);
+        printf("%s\n", cudaGetErrorString(cudaGetLastError()));
         cudaMemcpy(&finished, device_finished, sizeof(int), cudaMemcpyDeviceToHost);
         printf("iter\n");
     }
