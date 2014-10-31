@@ -10,8 +10,8 @@
 // image is 2D, total size is IMAGE_DIM x IMAGE_DIM
 #define IMAGE_DIM 512
 
-texture<int, cudaTextureType3D, cudaReadModeElementType> data_texture;
-texture<int, cudaTextureType3D, cudaReadModeElementType> region_texture;
+texture<unsigned char, cudaTextureType3D, cudaReadModeElementType> data_texture;
+texture<unsigned char, cudaTextureType3D, cudaReadModeElementType> region_texture;
 
 
 // Stack for the serial region growing
@@ -430,6 +430,7 @@ unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
 
 
 unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
+    printf("hello\n");
     dim3 gridBlock, threadBlock;
 
     gridBlock.x = 16;
@@ -451,7 +452,7 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
     cudaMalloc3DArray(&device_data, &channelDesc, extent, 0);
 
     cudaMemcpy3DParms data_copyParams = {0};
-    data_copyParams.srcPtr   = make_cudaPitchedPtr(data, DATA_DIM * sizeof(int), DATA_DIM, DATA_DIM);
+    data_copyParams.srcPtr   = make_cudaPitchedPtr(data, DATA_DIM * sizeof(unsigned char), DATA_DIM, DATA_DIM);
     data_copyParams.dstArray = device_data;
     data_copyParams.extent   = extent;
     data_copyParams.kind     = cudaMemcpyHostToDevice;
@@ -465,7 +466,7 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
     cudaMalloc3DArray(&device_region, &channelDesc, extent, 0);
 
     cudaMemcpy3DParms region_copyParams = {0};
-    region_copyParams.srcPtr   = make_cudaPitchedPtr(region, DATA_DIM * sizeof(int), DATA_DIM, DATA_DIM);
+    region_copyParams.srcPtr   = make_cudaPitchedPtr(region, DATA_DIM * sizeof(unsigned char), DATA_DIM, DATA_DIM);
     region_copyParams.dstArray = device_region;
     region_copyParams.extent   = extent;
     region_copyParams.kind     = cudaMemcpyHostToDevice;
@@ -475,8 +476,6 @@ unsigned char* raycast_gpu_texture(unsigned char* data, unsigned char* region){
     cudaBindTextureToArray(region_texture, device_region);
 
     raycast_kernel_texture<<<gridBlock, threadBlock>>>(device_image);
-
-    printf("%s", cudaGetErrorString(cudaGetLastError()));
 
     unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
     cudaMemcpy(image, device_image, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM, cudaMemcpyDeviceToHost);
