@@ -451,56 +451,64 @@ unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
     cl_mem device_image = clCreateBuffer(
             context,
             CL_MEM_READ_WRITE,
-            sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM,
+            sizeof(cl_uchar) * IMAGE_DIM * IMAGE_DIM,
             NULL,
             &err
             );
+    clError("create device image", err);
     cl_mem device_data = clCreateBuffer(
             context,
             CL_MEM_READ_WRITE,
-            sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM,
+            sizeof(cl_uchar) * DATA_DIM * DATA_DIM * DATA_DIM,
             NULL,
             &err
             );
+    clError("create device data", err);
     cl_mem device_region = clCreateBuffer(
             context,
             CL_MEM_READ_WRITE,
-            sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM,
+            sizeof(cl_uchar) * DATA_DIM * DATA_DIM * DATA_DIM,
             NULL,
             &err
             );
+    clError("create device region", err);
 
     err = clEnqueueWriteBuffer(
             queue,
             device_data,
             CL_TRUE,
             0,
-            sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM,
+            sizeof(cl_uchar) * DATA_DIM * DATA_DIM * DATA_DIM,
             data,
             0,
             NULL,
             NULL
             );
+    clError("write device data", err);
     err = clEnqueueWriteBuffer(
             queue,
             device_region,
             CL_TRUE,
             0,
-            sizeof(unsigned char) * DATA_DIM * DATA_DIM * DATA_DIM,
+            sizeof(cl_uchar) * DATA_DIM * DATA_DIM * DATA_DIM,
             region,
             0,
             NULL,
             NULL
             );
+    clError("write device region", err);
 
     err = clSetKernelArg(kernel, 0, sizeof(device_data), &device_data);
+    clError("error setting arguments", err);
     err = clSetKernelArg(kernel, 1, sizeof(device_image), &device_image);
+    clError("error setting arguments", err);
     err = clSetKernelArg(kernel, 2, sizeof(device_region), &device_region);
     clError("error setting arguments", err);
 
-    const size_t size = IMAGE_DIM*IMAGE_DIM;
+    const size_t global_size[] = {IMAGE_DIM, IMAGE_DIM};
+    const size_t local_size[] = {8, 8};
     err = clEnqueueNDRangeKernel(queue, kernel,
-            1, NULL, &size, NULL, 0, NULL, NULL);
+            2, NULL, global_size, local_size, 0, NULL, NULL);
     clError("Error queueing kernel", err);
 
     err = clFinish(queue);
@@ -509,12 +517,9 @@ unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
 
     unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
     err = clEnqueueReadBuffer(queue, device_image, CL_TRUE,
-            0, sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM, &image, 0, NULL, NULL);
+            0, sizeof(cl_uchar) * IMAGE_DIM * IMAGE_DIM, &image, 0, NULL, NULL);
 
     clError("reading buffer", err);
-
-    err = clFinish(queue);
-    clError("Waiting for finish", err);
 
     clReleaseMemObject(device_region);
     clReleaseMemObject(device_data);

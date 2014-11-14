@@ -61,9 +61,8 @@ float value_at(float3 pos, __global unsigned char* data){
 }
 
 __kernel void raycast_kernel(__global unsigned char* data, __global unsigned char* image, __global unsigned char* region){
-    int threadId = get_global_id(0);
-    int x = threadId % DATA_DIM;
-    int y = threadId/DATA_DIM % DATA_DIM;
+    int x = get_global_id(0) - IMAGE_DIM/2;
+    int y = get_global_id(1) - IMAGE_DIM/2;
 
     // Camera/eye position, and direction of viewing. These can be changed to look
     // at the volume from different angles.
@@ -75,7 +74,7 @@ __kernel void raycast_kernel(__global unsigned char* data, __global unsigned cha
     float3 right = cross(forward, z_axis);
     float3 up = cross(right, forward);
 
-    // Creating unity lenght vectors
+    // Creating unity length vectors
     forward = normalize(forward);
     right = normalize(right);
     up = normalize(up);
