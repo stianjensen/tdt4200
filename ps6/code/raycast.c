@@ -517,7 +517,7 @@ unsigned char* raycast_gpu(unsigned char* data, unsigned char* region){
 
     unsigned char *image = (unsigned char *)malloc(sizeof(unsigned char) * IMAGE_DIM * IMAGE_DIM);
     err = clEnqueueReadBuffer(queue, device_image, CL_TRUE,
-            0, sizeof(cl_uchar) * IMAGE_DIM * IMAGE_DIM, &image, 0, NULL, NULL);
+            0, sizeof(cl_uchar) * IMAGE_DIM * IMAGE_DIM, image, 0, NULL, NULL);
 
     clError("reading buffer", err);
 
